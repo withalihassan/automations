@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 create_okx_profiles.py
-Create real Chrome user-data dirs under C:\okx_profiles
+Create real Chrome user-data dirs directly under C:\
 Run Chrome like:
-  "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\okx_profiles\smsng_spot1\profile1"
+  "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\smsng_spot1\profile1"
 """
 import os, sys, json
 
-BASE_DIR = r"C:"  # change if you prefer a different location
+BASE_DIR = "C:\\"  # spots will be created directly under C:\ (e.g. C:\smsng_spot1)
 MAX = 500
 
 def ensure(path):
@@ -57,7 +57,7 @@ def main():
     for i in range(1, spots + 1):
         make_spot(BASE_DIR, i, profiles)
     print("\nDone. Launch Chrome with:")
-    print(r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\okx_profiles\smsng_spot1\profile1"')
+    print(r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="C:\smsng_spot1\profile1"')
 
 if __name__ == "__main__":
     main()
