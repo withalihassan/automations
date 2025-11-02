@@ -1,63 +1,61 @@
 #!/usr/bin/env python3
 """
-Launch Chrome with a specific user-data dir and profile (minimal + commented).
+Launch Chrome using a chosen Windows user-data folder and profile.
+Prompts the user for:
+ - spot number  -> used to build C:\smsng_spot{spot}
+ - profile num  -> used to build profile_{profile}
+ - email        -> collected (password is fixed)
+Password is always: @Smsng#0961
 """
-
 import os
 import ssl
-import time
+import certifi
+ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 import undetected_chromedriver as uc
-from selenium.webdriver.chrome.options import Options
 
-# --- OPTIONAL: skip certificate checks (only if you really need to) ---
-ssl._create_default_https_context = ssl._create_unverified_context
+OKX_URL = "https://v3.account.samsung.com/dashboard/security"
+CHROME_MAJOR_VERSION = 141
+FIXED_PASSWORD = "@Smsng#0961"
 
-CHROME_MAJOR_VERSION = 138  # change if you need a different Chrome major version
-
-def ask_positive_int(prompt: str) -> int:
-    """Ask repeatedly until user enters a positive integer."""
+def ask(prompt, required=True):
     while True:
-        s = input(prompt).strip()
-        if s.isdigit() and int(s) > 0:
-            return int(s)
-        print("  -> please enter a positive whole number (e.g. 1, 2, 3).")
+        v = input(prompt).strip()
+        if not v and required:
+            print("Please enter a value.")
+            continue
+        return v
 
 def main():
-    spot_id = ask_positive_int("Enter spot id (numeric) -> ")
-    profile_num = ask_positive_int("Enter profile number (numeric) -> ")
+    spot = ask("Enter spot number (e.g. 1 or 2): ")
+    profile = ask("Enter profile number (e.g. 1): ")
+    email = ask("Enter email: ")
 
-    user_data_dir = rf"C:\smsng_spot{spot_id}"
-    profile_name = f"profile{profile_num}"
+    BASE_USER_DATA_DIR = rf"C:\smsng_spot{spot}"
+    PROFILE_FOLDER = f"profile_{profile}"
 
-    # ensure the user-data-dir exists so Chrome can create profile subfolders
-    os.makedirs(user_data_dir, exist_ok=True)
+    print(f"\nUsing:\n  BASE_USER_DATA_DIR = {BASE_USER_DATA_DIR}\n  PROFILE_FOLDER     = {PROFILE_FOLDER}\n  EMAIL              = {email}\n  PASSWORD           = {FIXED_PASSWORD}\n")
 
-    # Nice console output
-    print("\n" + "="*48)
-    print("  Chrome launcher — using the following settings")
-    print("-"*48)
-    print(f"  User data dir : {user_data_dir}")
-    print(f"  Profile name  : {profile_name}")
-    print(f"  Chrome version: {CHROME_MAJOR_VERSION}")
-    print("="*48 + "\n")
+    os.makedirs(BASE_USER_DATA_DIR, exist_ok=True)
 
-    options = Options()
-    options.add_argument(f"--user-data-dir={user_data_dir}")
-    options.add_argument(f"--profile-directory={profile_name}")
+    opts = uc.ChromeOptions()
+    opts.add_argument(f"--user-data-dir={BASE_USER_DATA_DIR}")
+    opts.add_argument(f"--profile-directory={PROFILE_FOLDER}")
+    opts.add_argument("--start-maximized")
+    opts.add_argument("--no-first-run")
+    opts.add_argument("--no-default-browser-check")
 
+    # Optional: explicit Chrome binary path on Windows
+    chrome_bin = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+    if os.path.exists(chrome_bin):
+        opts.binary_location = chrome_bin
+
+    driver = uc.Chrome(options=opts, version_main=CHROME_MAJOR_VERSION, headless=False)
     try:
-        driver = uc.Chrome(options=options, version_main=CHROME_MAJOR_VERSION)
-    except Exception as e:
-        print("Failed to start Chrome:", e)
-        return
-
-    try:
-        driver.get("https://www.okx.com")
-        print("Browser opened. Press ENTER in this console to close everything and exit.")
-        input()  # keep browser open until user presses ENTER
+        driver.get(OKX_URL)
+        driver.implicitly_wait(5)
+        input("Press ENTER to close the browser and quit...")
     finally:
         driver.quit()
-        print("Browser closed. Exiting.")
 
 if __name__ == "__main__":
     main()
