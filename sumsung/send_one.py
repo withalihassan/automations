@@ -334,6 +334,12 @@ def main():
 
     # Chrome options
     opts = uc.ChromeOptions()
+    # --- Enable Headless Mode (modern method) ---
+    opts.add_argument("--headless=new")       # Use new headless for Chrome 109+
+    opts.add_argument("--disable-gpu")        # Disable GPU (for compatibility)
+    opts.add_argument("--window-size=1920,1080")  # Set fixed window size
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-desv-shm-usage")
     opts.add_argument(f"--user-data-dir={BASE_USER_DATA_DIR}")
     opts.add_argument(f"--profile-directory={PROFILE_FOLDER}")
     opts.add_argument("--start-maximized")
