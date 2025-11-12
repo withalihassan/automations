@@ -390,6 +390,7 @@ def main():
             return
 
         print("\n[+] Script completed successfully (form filled).")
+        time.sleep(250)
         input("Press ENTER to close browser and quit...")
 
     except Exception as e:
