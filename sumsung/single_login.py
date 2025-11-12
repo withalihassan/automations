@@ -206,6 +206,7 @@ def build_profile_details_data_url(spot: int, profile_num: int, email: str) -> s
         <div class="item"><b>Spot ID:</b> {spot}</div>
         <div class="item"><b>Profile ID:</b> {profile_num}</div>
         <div class="item"><b>Email:</b> {email}</div>
+        <div class="item"><b>Email:</b>@Smsng#860</div>
       </body>
     </html>
     """
