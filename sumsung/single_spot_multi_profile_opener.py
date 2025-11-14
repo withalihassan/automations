@@ -6,11 +6,13 @@ Behavior:
 - Ask for a single spot id first (numeric, e.g. 1)
 - Ask for a profile range next (e.g. "1,5" or "1-5") -> opens profile1 .. profile5
 - For each profile number in the range:
-    * create user-data-dir = DEFAULT_BASE + <spot_id> (if missing)
+    * create a separate user-data-dir for that profile:
+        DEFAULT_BASE<spot_id>\profile<profile_num>
     * launch Chrome with profile-directory=profile<profile_num>
     * open two tabs:
         1) a small data: page whose <title> is "Spot <spot_id> — Profile <profile_num> — Random"
         2) the configured URL
+    * open each Chrome window maximized (--start-maximized)
 - Keeps the script open until user presses ENTER (browser windows remain open).
 """
 
@@ -28,7 +30,7 @@ from typing import List
 ssl._create_default_https_context = ssl._create_unverified_context
 
 URL = "https://v3.account.samsung.com/dashboard/security"
-DEFAULT_BASE = r"C:\smsng_spot"  # base folder prefix; final dir will be DEFAULT_BASE<spot_id>
+DEFAULT_BASE = r"C:\smsng_spot"  # base folder prefix; final per-profile dir will be DEFAULT_BASE<spot_id>\profileN
 
 def ask_positive_int(prompt: str) -> int:
     while True:
@@ -101,13 +103,17 @@ def make_random_tab_data_url(spot_id: int, profile_num: int) -> str:
     return "data:text/html;charset=utf-8," + urllib.parse.quote(html)
 
 def launch_for_profile(chrome_path: str, spot_id: int, profile_num: int, url: str) -> bool:
-    user_data_dir = os.path.abspath(f"{DEFAULT_BASE}{spot_id}")
+    """
+    Each profile uses its own user-data-dir:
+      <DEFAULT_BASE><spot_id>\profile<profile_num>
+    """
+    base_spot_dir = os.path.abspath(f"{DEFAULT_BASE}{spot_id}")
     profile_name = f"profile{profile_num}"
+    # user_data_dir per profile (separate folder for each profile)
+    user_data_dir = os.path.join(base_spot_dir, profile_name)
     os.makedirs(user_data_dir, exist_ok=True)
 
-    # first tab: data: page with title showing spot/profile (randomized token inside)
     data_tab = make_random_tab_data_url(spot_id, profile_num)
-    # second tab: the real target URL
     second_tab = url
 
     cmd = [
@@ -116,6 +122,7 @@ def launch_for_profile(chrome_path: str, spot_id: int, profile_num: int, url: st
         f"--profile-directory={profile_name}",
         "--no-first-run",
         "--new-window",
+        "--start-maximized",   # <-- open maximized
         data_tab,
         second_tab
     ]
@@ -128,7 +135,7 @@ def launch_for_profile(chrome_path: str, spot_id: int, profile_num: int, url: st
         return False
 
 def main():
-    # ask spot id first
+    print("== Chrome multi-profile launcher (each profile gets its own user-data-dir) ==")
     spot_id = ask_positive_int("Enter single spot id (numeric, e.g. 1) -> ")
 
     print("Enter profile range (e.g. '1,5' or '1-5' to open profiles 1 through 5).")
@@ -145,10 +152,10 @@ def main():
     print("Launching Chrome for spot and profile range:")
     print(f"  spot id        : {spot_id}")
     print(f"  profiles       : {profiles}")
-    print(f"  profile dir(s) : profileN (under user-data-dir)")
-    print(f"  base user dir  : {DEFAULT_BASE}<spot_id>  (created if missing)")
+    print(f"  per-profile dir: {DEFAULT_BASE}<spot_id>\\profileN  (created if missing)")
     print(f"  url            : {URL}")
     print(f"  chrome exe     : {chrome_path}")
+    print("  windows opened : maximized (--start-maximized)")
     print("="*60 + "\n")
 
     successes = []

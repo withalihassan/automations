@@ -46,8 +46,9 @@ def main():
     spot_id = ask_positive_int("Enter spot id (numeric) -> ")
     profile_num = ask_positive_int("Enter profile number (numeric) -> ")
 
-    user_data_dir = os.path.abspath(f"{DEFAULT_BASE}{spot_id}")
+    BASE_USER_DATA_DIR = os.path.abspath(f"{DEFAULT_BASE}{spot_id}")
     profile_name = f"profile{profile_num}"  # you wanted 'profile1', 'profile2', etc.
+    user_data_dir = os.path.join(BASE_USER_DATA_DIR, profile_name)
     os.makedirs(user_data_dir, exist_ok=True)
 
     chrome_path = find_chrome_exe()

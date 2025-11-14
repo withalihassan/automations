@@ -11,9 +11,9 @@ from start to end (inclusive). For each profile the script:
 Behavior changes requested:
  - Runs Chrome in headless mode by default (`--headless=new` and uc.Chrome(..., headless=True)).
  - If NO password popup is detected, the profile is considered FAILED (previously the script continued).
-
-At the end the script prints a summary showing how many messages were
-successfully sent and which profiles succeeded/failed with messages.
+ - user-data-dir changed to: C:\smsng_spot<spot_id>\profile<profile_id>
+ - keep the prompt window open after the summary (wait for Enter)
+ - password popup error screenshots are saved with spot_id and profile_id in the filename
 
 Notes:
  - The DB connection (num_fetcher.get_db_connection) is opened once and used
@@ -361,7 +361,7 @@ def main():
 
     conn = num_fetcher.get_db_connection()
 
-    BASE_USER_DATA_DIR = rf"C:\smsng_spot{spot}"
+    BASE_USER_DATA_DIR = rf"C:\smsng_spot{spot}"  # now used as base; per-profile user-data-dir will be created below
 
     print("\nUsing:")
     print(f"  BASE_USER_DATA_DIR = {BASE_USER_DATA_DIR}")
@@ -379,6 +379,15 @@ def main():
         PROFILE_FOLDER = f"profile{profile_num}"
         profile_path = os.path.join(BASE_USER_DATA_DIR, PROFILE_FOLDER)
         print(f"\n--- Processing profile {profile_num} (folder: {PROFILE_FOLDER}) ---")
+
+        # Ensure profile-specific user-data-dir exists (new behavior)
+        try:
+            os.makedirs(profile_path, exist_ok=True)
+        except Exception as e:
+            msg = f"Failed to create profile user-data-dir '{profile_path}': {e}"
+            print(f"[ERROR] {msg}")
+            results[profile_num] = {"status": "error", "phone": None, "message": msg}
+            continue
 
         # fetch a number for this profile
         number_row = None
@@ -405,8 +414,10 @@ def main():
         opts.add_argument("--window-size=1920,1080")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-desv-shm-usage")
-        opts.add_argument(f"--user-data-dir={BASE_USER_DATA_DIR}")
-        opts.add_argument(f"--profile-directory={PROFILE_FOLDER}")
+        # Use profile-specific user-data-dir (change requested)
+        profile_user_data_dir = profile_path  # C:\smsng_spot<spot>\profile<profile_num>
+        opts.add_argument(f"--user-data-dir={profile_user_data_dir}")
+        # do not specify profile-directory since the user-data-dir points directly to the profile folder
         opts.add_argument("--start-maximized")
         opts.add_argument("--no-first-run")
         opts.add_argument("--no-default-browser-check")
@@ -433,7 +444,8 @@ def main():
                 print(f"[ERROR] {msg}")
                 if SCREENSHOT_ON_ERROR:
                     try:
-                        take_screenshot(driver, f"password_popup_error_profile{profile_num}.png")
+                        # include spot and profile in screenshot filename (requested)
+                        take_screenshot(driver, f"password_popup_error_spot{spot}_profile{profile_num}.png")
                     except Exception:
                         pass
                 results[profile_num] = {"status": "error", "phone": phone, "message": msg}
@@ -454,7 +466,7 @@ def main():
                     msg = "Selecting country (UK) failed even after closing cookie popup."
                     print(f"[ERROR] {msg}")
                     if SCREENSHOT_ON_ERROR:
-                        take_screenshot(driver, f"select_country_error_profile{profile_num}.png")
+                        take_screenshot(driver, f"select_country_error_spot{spot}_profile{profile_num}.png")
                     results[profile_num] = {"status": "error", "phone": phone, "message": msg}
                     continue
 
@@ -464,7 +476,7 @@ def main():
                 msg = "Entering phone or clicking Send code failed."
                 print(f"[ERROR] {msg}")
                 if SCREENSHOT_ON_ERROR:
-                    take_screenshot(driver, f"send_code_error_profile{profile_num}.png")
+                    take_screenshot(driver, f"send_code_error_spot{spot}_profile{profile_num}.png")
                 results[profile_num] = {"status": "error", "phone": phone, "message": msg}
                 continue
 
@@ -490,7 +502,7 @@ def main():
                     results[profile_num] = {"status": "error", "phone": phone, "message": msg}
             else:
                 if SCREENSHOT_ON_ERROR:
-                    take_screenshot(driver, f"verification_message_missing_profile{profile_num}.png")
+                    take_screenshot(driver, f"verification_message_missing_spot{spot}_profile{profile_num}.png")
                 msg = "Verification message not seen; not decrementing the number."
                 print(f"[ERROR] {msg}")
                 results[profile_num] = {"status": "error", "phone": phone, "message": msg}
@@ -504,7 +516,7 @@ def main():
             print(f"[ERROR] {msg}")
             if driver and SCREENSHOT_ON_ERROR:
                 try:
-                    take_screenshot(driver, f"unexpected_error_profile{profile_num}.png")
+                    take_screenshot(driver, f"unexpected_error_spot{spot}_profile{profile_num}.png")
                 except Exception:
                     pass
             results[profile_num] = {"status": "error", "phone": phone, "message": msg}
@@ -542,6 +554,12 @@ def main():
             print(f"  - profile{p}: phone={r.get('phone')} error='{r.get('message')}'")
 
     print("\nScript finished.")
+    # Keep the prompt window open until the user presses Enter (requested)
+    try:
+        input("\nPress Enter to exit (window will remain open until you do)...")
+    except Exception:
+        # In case input is unavailable, just pass
+        pass
 
 
 if __name__ == "__main__":

@@ -249,18 +249,19 @@ def main():
     # 3) Prepare chrome profile paths
     BASE_USER_DATA_DIR = rf"C:\smsng_spot{spot_in}"
     PROFILE_FOLDER = f"profile{profile_in}"
+    user_data_dir = os.path.join(BASE_USER_DATA_DIR, PROFILE_FOLDER)
     os.makedirs(BASE_USER_DATA_DIR, exist_ok=True)
 
     print("\nUsing:")
     print(f"  Spot ID         = {spot_in}")
     print(f"  Profile ID      = {profile_in}")
     print(f"  Email           = {email}")
-    print(f"  Chrome Data Dir = {BASE_USER_DATA_DIR}\\{PROFILE_FOLDER}")
+    print(f"  Chrome Data Dir = {user_data_dir}")
     print(f"  Password (ref.) = {FIXED_PASSWORD}\n")
 
     # 4) Chrome options
     opts = uc.ChromeOptions()
-    opts.add_argument(f"--user-data-dir={BASE_USER_DATA_DIR}")
+    opts.add_argument(f"--user-data-dir={user_data_dir}")
     opts.add_argument(f"--profile-directory={PROFILE_FOLDER}")
     opts.add_argument("--start-maximized")
     opts.add_argument("--no-first-run")
