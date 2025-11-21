@@ -2,25 +2,11 @@
 """
 Windows-ready flow for phone verification (Samsung dashboard).
 
-Updated to accept a multi-profile range (e.g. `1,5`) and iterate profiles
-from start to end (inclusive). For each profile the script:
- - fetches a phone from DB (misc/num_fetcher.py)
- - performs the send-code flow for that profile (now in headless mode)
- - if verification-sent is detected, calls lock_and_decrement(conn, phone)
-
-Behavior changes requested:
- - Runs Chrome in headless mode by default (`--headless=new` and uc.Chrome(..., headless=True)).
- - If NO password popup is detected, the profile is considered FAILED (previously the script continued).
- - user-data-dir changed to: C:\smsng_spot<spot_id>\profile<profile_id>
- - keep the prompt window open after the summary (wait for Enter)
- - password popup error screenshots are saved with spot_id and profile_id in the filename
-
-Notes:
- - The DB connection (num_fetcher.get_db_connection) is opened once and used
-   for all profiles; it's closed at the end.
- - The script validates the range input (two comma separated integers
-   where the first <= second). If input is invalid it asks again.
-
+Behavior changes from previous version:
+ - Reserves (locks) a number immediately when selected using num_fetcher.reserve_number().
+ - After the attempt (success or any error) the number is freed back to master using num_fetcher.free_number().
+ - On successful send the script prints "Message sent successfully".
+ - If reserving a chosen number races with another process, the script will retry picking/reserving a number a few times.
 """
 import os
 import sys
@@ -55,6 +41,7 @@ CHROME_MAJOR_VERSION = 141
 FIXED_PASSWORD       = "@Smsng#860"
 DEFAULT_WAIT_SECONDS = 20
 SCREENSHOT_ON_ERROR  = True
+RESERVE_TRIES        = 4   # how many times to pick/reserve a number if races happen
 # -------------------------------------------------
 
 
@@ -179,7 +166,12 @@ def close_cookie_popup_if_present(driver, wait_seconds=3):
     return False
 
 
-def select_country_uk(driver, wait_seconds=DEFAULT_WAIT_SECONDS):
+def select_country_from_row(driver, number_row, wait_seconds=DEFAULT_WAIT_SECONDS):
+    """
+    Generic country selection using DB-provided values in number_row.
+    number_row should contain keys: data_value, full_text, country_code, country_name
+    Returns True on success, False otherwise.
+    """
     wait = WebDriverWait(driver, wait_seconds)
     try:
         combobox = wait.until(EC.element_to_be_clickable((By.ID, "county-calling-code-select")))
@@ -201,11 +193,32 @@ def select_country_uk(driver, wait_seconds=DEFAULT_WAIT_SECONDS):
 
     time.sleep(0.25)
 
-    strategies = [
-        ("data-value", "//li[@data-value='GB']"),
-        ("by-text", "//li[contains(normalize-space(.), 'United Kingdom') or contains(normalize-space(.), 'United Kingdom (+44)') ]"),
-        ("by-plus44", "//li[contains(normalize-space(.), '+44') ]"),
-    ]
+    # values we will attempt to use (normalize to safe forms)
+    data_value = (number_row.get("data_value") or "").strip()
+    full_text = (number_row.get("full_text") or "").strip()
+    country_name = (number_row.get("country_name") or "").strip()
+    country_code = (number_row.get("country_code") or "").strip()  # may include '+'
+
+    strategies = []
+
+    if data_value:
+        strategies.append(("data-value", f"//li[@data-value='{data_value}']"))
+    if full_text:
+        # full_text often contains "United Kingdom (+44)" — match contained text
+        strategies.append(("by-fulltext", f"//li[contains(normalize-space(.), '{full_text}')]"))
+    if country_name:
+        strategies.append(("by-name", f"//li[contains(normalize-space(.), '{country_name}')]"))
+    if country_code:
+        # match +44 or 44 (strip plus)
+        cc_plain = country_code.replace("+", "").strip()
+        strategies.append(("by-plus", f"//li[contains(normalize-space(.), '+{cc_plain}') or contains(normalize-space(.), '{cc_plain}')]"))
+
+    # fallback: try common patterns for UK if DB had nothing useful
+    if not strategies:
+        strategies = [
+            ("data-value-GB", "//li[@data-value='GB']"),
+            ("by-text-UK", "//li[contains(normalize-space(.), 'United Kingdom') or contains(normalize-space(.), '+44') ]"),
+        ]
 
     for name, xpath in strategies:
         try:
@@ -213,18 +226,35 @@ def select_country_uk(driver, wait_seconds=DEFAULT_WAIT_SECONDS):
             if not candidates:
                 continue
             for cand in candidates:
-                text = cand.text.strip()
-                dv = cand.get_attribute("data-value")
-                if dv and dv.strip().upper() == "GB":
-                    print(f"[+] Clicking UK option (data-value='GB') -> text: {text}")
+                try:
+                    text = cand.text.strip()
+                    dv = cand.get_attribute("data-value")
+                except Exception:
+                    text = ""
+                    dv = None
+                # prefer exact data_value match if we have it
+                if data_value and dv and dv.strip().upper() == data_value.strip().upper():
+                    print(f"[+] Clicking option by data-value match ({data_value}) -> text: {text[:80]}")
                     if safe_click(driver, cand):
                         time.sleep(0.4)
                         return True
-                if "United Kingdom" in text or "+44" in text:
-                    print(f"[+] Clicking UK-like option (text match) -> text: {text}")
+                # otherwise match by text containing full_text or country_name or country_code
+                if full_text and full_text in text:
+                    print(f"[+] Clicking option by full_text match -> text: {text[:80]}")
                     if safe_click(driver, cand):
                         time.sleep(0.4)
                         return True
+                if country_name and country_name in text:
+                    print(f"[+] Clicking option by country_name match -> text: {text[:80]}")
+                    if safe_click(driver, cand):
+                        time.sleep(0.4)
+                        return True
+                if country_code and country_code in text:
+                    print(f"[+] Clicking option by country_code match -> text: {text[:80]}")
+                    if safe_click(driver, cand):
+                        time.sleep(0.4)
+                        return True
+            # if none matched preferrably, click first candidate as last resort for this strategy
             first = candidates[0]
             print(f"[*] Candidates found by {name}; trying first via JS: '{first.text.strip()[:60]}'")
             try:
@@ -238,7 +268,7 @@ def select_country_uk(driver, wait_seconds=DEFAULT_WAIT_SECONDS):
             print(f"[WARN] strategy {name} raised: {e}")
             continue
 
-    print("[ERROR] Could not select United Kingdom (+44) from country list.")
+    print("[ERROR] Could not select country from country list using DB-provided values.")
     try:
         all_li = driver.find_elements(By.XPATH, "//li")
         print("[DEBUG] Available <li> items (first 20):")
@@ -299,18 +329,17 @@ def enter_phone_and_send_code(driver, phone, wait_seconds=DEFAULT_WAIT_SECONDS):
 
 
 def wait_for_verification_message(driver, wait_seconds=DEFAULT_WAIT_SECONDS):
+    """
+    Wait for the onscreen confirmation message indicating a code was sent.
+    Returns the text if found, otherwise None.
+    """
     wait = WebDriverWait(driver, wait_seconds)
     try:
         elem = wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//*[contains(normalize-space(.), 'verification code has been sent')]")
+            (By.XPATH, "//*[contains(normalize-space(.), 'verification code has been sent') or contains(normalize-space(.), 'verification code sent') or contains(normalize-space(.), 'code has been sent')]")
         ))
         text = elem.text.strip()
-        # Extract only the line that contains 'verification'
-        for line in text.splitlines():
-            if "verification" in line.lower():
-                text = line.strip()
-                break
-        print(f"[+] Message found: {text}")
+        # print(f"[+] Confirmation message found (raw): {text}")
         return text
     except TimeoutException:
         print("[ERROR] Verification-sent message did not appear within timeout.")
@@ -353,20 +382,24 @@ def main():
         profile_start, profile_end = rng
         break
 
-    # --- Fetch range_id for DB usage ---
-    range_id = num_fetcher.read_range_id_from_file(num_fetcher.RANGE_FILE)
-    if not range_id:
-        print("[ERROR] No range_id available (check misc/range.txt). Exiting.")
+    # Ask user to input range_id (this is the numeric range_id in your DB)
+    range_id = ask("Enter range_id (numeric, as stored in DB): ")
+
+    # Read user_id from misc/user.txt (first non-empty line)
+    user_id = num_fetcher.read_user_id_from_file(num_fetcher.USER_FILE)
+    if not user_id:
+        print(f"[ERROR] No user_id available (check {num_fetcher.USER_FILE}). Exiting.")
         return
 
     conn = num_fetcher.get_db_connection()
 
-    BASE_USER_DATA_DIR = rf"C:\smsng_spot{spot}"  # now used as base; per-profile user-data-dir will be created below
+    BASE_USER_DATA_DIR = rf"C:\smsng_spot{spot}"  # per-profile user-data-dir will be created below
 
     print("\nUsing:")
     print(f"  BASE_USER_DATA_DIR = {BASE_USER_DATA_DIR}")
     print(f"  PROFILE_RANGE      = {profile_start}..{profile_end}")
-    print(f"  COUNTRY            = United Kingdom (+44)")
+    print(f"  DB user_id         = {user_id}")
+    print(f"  DB range_id        = {range_id}")
     print(f"  FIXED_PASSWORD     = {FIXED_PASSWORD}\n")
 
     os.makedirs(BASE_USER_DATA_DIR, exist_ok=True)
@@ -380,7 +413,7 @@ def main():
         profile_path = os.path.join(BASE_USER_DATA_DIR, PROFILE_FOLDER)
         print(f"\n--- Processing profile {profile_num} (folder: {PROFILE_FOLDER}) ---")
 
-        # Ensure profile-specific user-data-dir exists (new behavior)
+        # Ensure profile-specific user-data-dir exists
         try:
             os.makedirs(profile_path, exist_ok=True)
         except Exception as e:
@@ -389,35 +422,66 @@ def main():
             results[profile_num] = {"status": "error", "phone": None, "message": msg}
             continue
 
-        # fetch a number for this profile
         number_row = None
         phone = None
+        reserved = False
+
+        # Attempt to pick and reserve a number (retry a few times if raced)
         try:
-            number_row = num_fetcher.get_random_number(conn, range_id)
+            for attempt in range(1, RESERVE_TRIES + 1):
+                number_row = num_fetcher.get_random_number(conn, range_id, user_id)
+                if not number_row:
+                    msg = f"No available numbers for range_id = {range_id}, user_id = {user_id}."
+                    print(f"[ERROR] {msg}")
+                    number_row = None
+                    break
+                phone = str(number_row["number"])
+                print(f"[+] Selected number (attempt {attempt}): {phone} (not reserved yet)")
+
+                # Try to reserve it (set belong_to='locked')
+                try:
+                    ok = num_fetcher.reserve_number(conn, phone)
+                    if ok:
+                        reserved = True
+                        print(f"[+] Reserved number {phone} for this process.")
+                        break
+                    else:
+                        print(f"[*] Reserve failed for {phone} (likely raced). Retrying...")
+                        phone = None
+                        number_row = None
+                        continue
+                except Exception as e:
+                    print(f"[ERROR] Exception while reserving {phone}: {e}")
+                    phone = None
+                    number_row = None
+                    continue
+
             if not number_row:
-                msg = f"No available numbers for range_id = {range_id}."
-                print(f"[ERROR] {msg}")
-                results[profile_num] = {"status": "error", "phone": None, "message": msg}
+                # no number available/reservable for this profile
+                results[profile_num] = {"status": "error", "phone": None, "message": "No reservable number available."}
                 continue
-            phone = str(number_row["number"])
-            print(f"[+] Selected number (not reserved yet): {phone}")
+
+            # show a short country summary
+            cn = number_row.get("country_name") or number_row.get("full_text") or "Unknown"
+            cc = number_row.get("country_code") or ""
+            dv = number_row.get("data_value") or ""
+            print(f"[+] Country info from DB: data_value={dv} country='{cn}' code='{cc}'")
+
         except Exception as e:
-            msg = f"Failed to fetch number from DB: {e}"
+            msg = f"Failed to fetch/reserve number from DB: {e}"
             print(f"[ERROR] {msg}")
             results[profile_num] = {"status": "error", "phone": None, "message": msg}
             continue
 
+        # Start browser and perform the flow. Ensure we free the reserved number on any exit.
         opts = uc.ChromeOptions()
-        # run headless by default as requested
         opts.add_argument("--headless=new")
         opts.add_argument("--disable-gpu")
         opts.add_argument("--window-size=1920,1080")
         opts.add_argument("--no-sandbox")
         opts.add_argument("--disable-desv-shm-usage")
-        # Use profile-specific user-data-dir (change requested)
-        profile_user_data_dir = profile_path  # C:\smsng_spot<spot>\profile<profile_num>
+        profile_user_data_dir = profile_path
         opts.add_argument(f"--user-data-dir={profile_user_data_dir}")
-        # do not specify profile-directory since the user-data-dir points directly to the profile folder
         opts.add_argument("--start-maximized")
         opts.add_argument("--no-first-run")
         opts.add_argument("--no-default-browser-check")
@@ -432,7 +496,6 @@ def main():
 
         driver = None
         try:
-            # headless=True to ensure headless operation
             driver = uc.Chrome(options=opts, version_main=CHROME_MAJOR_VERSION, headless=True)
             driver.get(OKX_PHONE_URL)
             driver.implicitly_wait(2)
@@ -444,7 +507,6 @@ def main():
                 print(f"[ERROR] {msg}")
                 if SCREENSHOT_ON_ERROR:
                     try:
-                        # include spot and profile in screenshot filename (requested)
                         take_screenshot(driver, f"password_popup_error_spot{spot}_profile{profile_num}.png")
                     except Exception:
                         pass
@@ -454,16 +516,16 @@ def main():
             time.sleep(0.4)
 
             print("[*] Attempting country selection (first try)...")
-            if select_country_uk(driver, wait_seconds=DEFAULT_WAIT_SECONDS):
-                print("[+] Country selected on first try (no cookie close needed).")
+            if select_country_from_row(driver, number_row, wait_seconds=DEFAULT_WAIT_SECONDS):
+                print("[+] Country selected on first try.")
             else:
                 print("[*] Country selection failed on first try — attempting to close cookie/footer popup and retry.")
                 close_cookie_popup_if_present(driver, wait_seconds=3)
                 time.sleep(0.5)
-                if select_country_uk(driver, wait_seconds=DEFAULT_WAIT_SECONDS):
+                if select_country_from_row(driver, number_row, wait_seconds=DEFAULT_WAIT_SECONDS):
                     print("[+] Country selected after closing cookie popup.")
                 else:
-                    msg = "Selecting country (UK) failed even after closing cookie popup."
+                    msg = "Selecting country (from DB values) failed even after closing cookie popup."
                     print(f"[ERROR] {msg}")
                     if SCREENSHOT_ON_ERROR:
                         take_screenshot(driver, f"select_country_error_spot{spot}_profile{profile_num}.png")
@@ -484,26 +546,16 @@ def main():
 
             msg_text = wait_for_verification_message(driver, wait_seconds=DEFAULT_WAIT_SECONDS)
             if msg_text:
-                print(f"\n=== Verification message (profile {profile_num}) ===\n{msg_text}\n========================================\n")
-                # Successful flow: now decrement/lock the number in DB
-                try:
-                    ok = num_fetcher.lock_and_decrement(conn, phone)
-                    if ok:
-                        print(f"[+] Number {phone} locked and num_limit decremented successfully.")
-                        results[profile_num] = {"status": "ok", "phone": phone, "message": msg_text}
-                        total_sent += 1
-                    else:
-                        msg = f"Failed to lock_and_decrement number {phone}. It may have been taken by another process."
-                        print(f"[WARN] {msg}")
-                        results[profile_num] = {"status": "error", "phone": phone, "message": msg}
-                except Exception as e:
-                    msg = f"Exception while locking/decrementing number {phone}: {e}"
-                    print(f"[ERROR] {msg}")
-                    results[profile_num] = {"status": "error", "phone": phone, "message": msg}
+                # Successful flow: report success (but per your request we free the number afterward)
+                print("\n=== Result ===")
+                print("Message sent successfully")
+                print("==============\n")
+                results[profile_num] = {"status": "ok", "phone": phone, "message": "Message sent successfully"}
+                total_sent += 1
             else:
                 if SCREENSHOT_ON_ERROR:
                     take_screenshot(driver, f"verification_message_missing_spot{spot}_profile{profile_num}.png")
-                msg = "Verification message not seen; not decrementing the number."
+                msg = "Verification message not seen; treating as failure for this profile."
                 print(f"[ERROR] {msg}")
                 results[profile_num] = {"status": "error", "phone": phone, "message": msg}
                 continue
@@ -521,6 +573,16 @@ def main():
                     pass
             results[profile_num] = {"status": "error", "phone": phone, "message": msg}
         finally:
+            # Always attempt to free the number if we reserved it
+            if reserved and phone:
+                try:
+                    freed = num_fetcher.free_number(conn, phone)
+                    if freed:
+                        print(f"[+] Freed number {phone} back to 'master' with decremented value.")
+                    else:
+                        print(f"[WARN] Could not free number {phone} (it may no longer be locked).")
+                except Exception as e:
+                    print(f"[ERROR] Exception while freeing number {phone}: {e}")
             try:
                 if driver:
                     driver.quit()
@@ -536,7 +598,7 @@ def main():
     # Summary
     print("\n=== SUMMARY ===")
     print(f"Profiles processed: {profile_start}..{profile_end} (count = {profile_end - profile_start + 1})")
-    print(f"Total messages successfully sent and locked: {total_sent}")
+    print(f"Total messages successfully sent: {total_sent}")
 
     success_profiles = [p for p, r in results.items() if r.get("status") == "ok"]
     failed_profiles = [p for p, r in results.items() if r.get("status") != "ok"]
@@ -554,11 +616,9 @@ def main():
             print(f"  - profile{p}: phone={r.get('phone')} error='{r.get('message')}'")
 
     print("\nScript finished.")
-    # Keep the prompt window open until the user presses Enter (requested)
     try:
         input("\nPress Enter to exit (window will remain open until you do)...")
     except Exception:
-        # In case input is unavailable, just pass
         pass
 
 

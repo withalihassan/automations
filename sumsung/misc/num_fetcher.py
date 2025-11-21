@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Minimal numbers manager:
-- reads range_id from ./range.txt (first non-empty line)
-- get_random_number(conn, range_id)
-- lock_and_decrement(conn, number)
-- free_number(conn, number)
+Minimal numbers manager updated:
+
+ - reads user_id from ./user.txt (first non-empty line) using read_user_id_from_file
+ - get_random_number(conn, range_id, user_id=None)
+   returns a dict including: id, range_id, data_value, full_text, country_name,
+   country_code, num_limit, number, belong_to, added_at
+ - reserve_number(conn, number)  -> sets belong_to='locked' (atomic via SELECT ... FOR UPDATE)
+ - free_number(conn, number)     -> sets belong_to='master' if currently 'locked'
+ - lock_and_decrement(conn, number) remains for backward compatibility (locks and decrements num_limit)
 
 Requires a `config.py` exporting DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT
 """
-
 import os
 import sys
 from pathlib import Path
@@ -16,7 +19,7 @@ import pymysql
 from typing import Optional, Dict, Any
 from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT
 
-RANGE_FILE = Path(__file__).resolve().parent / "range.txt"
+USER_FILE = Path(__file__).resolve().parent / "user.txt"
 
 def get_db_connection():
     # autocommit=False so we can safely use SELECT ... FOR UPDATE in transactions
@@ -37,10 +40,10 @@ def _safe_int(value: Any) -> int:
     except Exception:
         return 0
 
-def read_range_id_from_file(path: Path) -> Optional[str]:
+def read_user_id_from_file(path: Path) -> Optional[str]:
     """Return the first non-empty line from the file, stripped, or None if not present."""
     if not path.exists():
-        print(f"range file not found: {path}", file=sys.stderr)
+        print(f"user file not found: {path}", file=sys.stderr)
         return None
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -49,24 +52,31 @@ def read_range_id_from_file(path: Path) -> Optional[str]:
                 if candidate:
                     return candidate
     except Exception as e:
-        print(f"failed to read range file {path}: {e}", file=sys.stderr)
+        print(f"failed to read user file {path}: {e}", file=sys.stderr)
         return None
     return None
 
-def get_random_number(conn, range_id) -> Optional[Dict]:
+def get_random_number(conn, range_id, user_id: Optional[str]=None) -> Optional[Dict]:
     """
     Pick a random number row that is available (belong_to='master' and num_limit>0)
-    for the given range_id. This does NOT reserve/lock the row — reservation happens
-    only when lock_and_decrement() is called.
+    for the given range_id. If user_id is provided, filter by user_id as well.
+    This does NOT reserve/lock the row — reservation happens via reserve_number().
+    Returns a dict with the important columns (including country fields).
     """
     with conn.cursor() as cur:
-        sql = (
-            "SELECT id, range_id, country_name, country_code, num_limit, number, belong_to, added_at "
+        base_sql = (
+            "SELECT id, user_id, range_id, data_value, full_text, country_name, country_code, "
+            "num_limit, number, belong_to, added_at "
             "FROM numbers "
             "WHERE belong_to='master' AND num_limit>0 AND range_id=%s "
-            "ORDER BY RAND() LIMIT 1"
         )
-        cur.execute(sql, (range_id,))
+        params = [range_id]
+        if user_id:
+            base_sql += " AND user_id=%s "
+            params.append(user_id)
+        base_sql += " ORDER BY RAND() LIMIT 1"
+
+        cur.execute(base_sql, tuple(params))
         row = cur.fetchone()
         if not row:
             return None
@@ -74,6 +84,40 @@ def get_random_number(conn, range_id) -> Optional[Dict]:
         # normalize numeric types coming from DB
         row["num_limit"] = _safe_int(row.get("num_limit"))
         return row
+
+def reserve_number(conn, number) -> bool:
+    """
+    Atomically reserve (lock) the specific number for this process:
+      - SELECT ... FOR UPDATE to lock the row
+      - ensure belong_to='master'
+      - set belong_to='locked'
+
+    Returns True if the reservation succeeded, False otherwise.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, belong_to FROM numbers WHERE number=%s FOR UPDATE", (number,))
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                return False
+            if row.get("belong_to") != "master":
+                conn.rollback()
+                return False
+
+            cur.execute(
+                "UPDATE numbers SET belong_to='locked' WHERE id=%s AND belong_to='master'",
+                (row["id"],)
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False
+
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
 
 def lock_and_decrement(conn, number) -> bool:
     """
@@ -120,10 +164,11 @@ def free_number(conn, number) -> bool:
     """
     Mark a previously locked number back to master (free it).
     Does not change num_limit.
+    Returns True if the row was updated (previously locked), False otherwise.
     """
     try:
         with conn.cursor() as cur:
-            cur.execute("UPDATE numbers SET belong_to='master' WHERE number=%s AND belong_to='locked'", (number,))
+            cur.execute("UPDATE numbers SET belong_to='master' , num_limit = num_limit - 1  WHERE number=%s AND belong_to='locked'", (number,))
             updated = cur.rowcount
         conn.commit()
         return updated > 0
@@ -132,30 +177,37 @@ def free_number(conn, number) -> bool:
         raise
 
 def main():
-    range_id = read_range_id_from_file(RANGE_FILE)
-    if not range_id:
-        print("No range_id available (check range.txt). Exiting.", file=sys.stderr)
+    user_id = read_user_id_from_file(USER_FILE)
+    if not user_id:
+        print("No user_id available (check user.txt). Exiting.", file=sys.stderr)
         return 1
 
     conn = get_db_connection()
     try:
-        row = get_random_number(conn, range_id)
-        if not row:
-            print("No available numbers for range_id =", range_id)
+        # for demo purpose: prompt range_id so this script can be run manually
+        range_id = input("Enter range_id to pick from: ").strip()
+        if not range_id:
+            print("No range_id provided. Exiting.", file=sys.stderr)
             return 2
+
+        row = get_random_number(conn, range_id, user_id)
+        if not row:
+            print("No available numbers for range_id =", range_id, "user_id =", user_id)
+            return 3
 
         number = row["number"]
         print("Selected number (not yet reserved):", number)
+        print("Country data:", row.get("data_value"), row.get("full_text"), row.get("country_code"))
 
-        # try to lock and decrement
-        ok = lock_and_decrement(conn, number)
+        # try to reserve
+        ok = reserve_number(conn, number)
         if not ok:
-            print("Failed to lock & decrement (likely raced with another process). Try again.")
-            return 3
+            print("Failed to reserve (likely raced with another process). Try again.")
+            return 4
 
-        print("Locked and decremented num_limit for number:", number)
+        print("Reserved number:", number)
 
-        # --- simulate "display" step here ---
+        # --- simulate "display/use" step here ---
         # After you display/use the number, free it back:
         freed = free_number(conn, number)
         if freed:

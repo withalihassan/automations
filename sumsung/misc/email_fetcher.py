@@ -4,22 +4,24 @@ email_fetcher.py
 
 Fetch the least-recently-used account row for a given spot_id/profile_id.
 
-Usage:
-    python email_fetcher.py --spot 1 --profile 1
+Usage (module):
+    from misc.email_fetcher import get_email_for_profile
+    row = get_email_for_profile(spot_id, profile_id)
+
+Usage (CLI):
+    python misc/email_fetcher.py --spot 1 --profile 1
 
 Notes:
- - Expects a config.py exporting DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT
+ - Expects config.py exporting DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT
    (this script will try to import it normally and also try to load it from
-   the same folder as this script if normal import fails).
+   common local locations if normal import fails).
  - Requires pymysql.
 """
-
 from __future__ import annotations
 import sys
 import os
 from pathlib import Path
 from typing import Optional, Dict, Any
-import importlib
 import importlib.util
 import pymysql
 from pymysql.cursors import DictCursor
@@ -39,28 +41,32 @@ def _load_config_module() -> object:
     located next to this script (or in parent/misc).
     Returns a module-like object exposing DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT.
     """
+    # try normal import
     try:
         import config  # type: ignore
         return config
     except Exception:
-        # attempt to find a config.py file next to this script
-        for p in _CONFIG_SEARCH_PATHS:
-            if p.exists():
-                spec = importlib.util.spec_from_file_location("config", str(p))
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(mod)  # type: ignore
-                    return mod
-        # last fallback: try to import by adding THIS_DIR to sys.path
-        sys.path.insert(0, str(THIS_DIR))
-        try:
-            import config  # type: ignore
-            return config
-        except Exception as e:
-            raise RuntimeError(
-                "Unable to import config.py. Place config.py next to this script "
-                "or ensure it's discoverable on PYTHONPATH."
-            ) from e
+        pass
+
+    # attempt to find a config.py in the common search paths
+    for p in _CONFIG_SEARCH_PATHS:
+        if p.exists():
+            spec = importlib.util.spec_from_file_location("config", str(p))
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)  # type: ignore
+                return mod
+
+    # fallback: try adding THIS_DIR to sys.path and import again
+    sys.path.insert(0, str(THIS_DIR))
+    try:
+        import config  # type: ignore
+        return config
+    except Exception as e:
+        raise RuntimeError(
+            "Unable to import config.py. Place config.py next to this script "
+            "or ensure it's discoverable on PYTHONPATH."
+        ) from e
 
 # load config values (raises descriptive error if missing)
 _cfg = _load_config_module()
@@ -109,6 +115,10 @@ def get_email_for_profile(spot_id: int, profile_id: int) -> Optional[Dict[str, A
     """
     Return a dict with account fields for the given spot_id and profile_id,
     matching range_id from RANGE_FILE as well (if available).
+    Expected fields returned include at least:
+      - email
+      - email_psw
+      - (other fields from your accounts table)
     Returns None if no matching row found.
     """
     range_id = read_range_id_from_file(RANGE_FILE)
@@ -141,7 +151,7 @@ def get_email_for_profile(spot_id: int, profile_id: int) -> Optional[Dict[str, A
         except Exception:
             pass
 
-# CLI convenience
+# CLI convenience (keeps your original CLI)
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Fetch account/email for a spot/profile.")
@@ -152,7 +162,6 @@ if __name__ == "__main__":
     if not r:
         print("No account found for spot", args.spot, "profile", args.profile)
     else:
-        # pretty print
         from pprint import pprint
         print("Found:")
         pprint(r)
