@@ -431,9 +431,9 @@ def enter_code_and_click_next(driver, code: str, tag: str) -> bool:
     return False
 
 # ---------- Worker and polling ----------
-def create_chrome_options_windows(user_data_dir, profile_folder, extra_args=None):
+def create_chrome_options_windows(base_user_data_dir, profile_folder, extra_args=None):
     opts = uc.ChromeOptions()
-    opts.add_argument(f"--user-data-dir={user_data_dir}")
+    opts.add_argument(f"--user-data-dir={base_user_data_dir}")
     opts.add_argument(f"--profile-directory={profile_folder}")
     opts.add_argument("--start-maximized")
     opts.add_argument("--no-first-run")
@@ -486,8 +486,9 @@ def poll_mail_for_verification_code_simple(email: str, email_psw: str, api_base:
 def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close_timeout: int, detach: bool, idx: int,
                   mail_api_base: Optional[str], mail_api_key: Optional[str], verification_timeout: int, verification_poll: float):
     tag = f"[spot-{spot}]"
-    base_user_data_dir = rf"C:\smsng_spot{spot}"
+    user_data_dir = rf"C:\smsng_spot{spot}"
     profile_folder = f"profile{profile}"
+    base_user_data_dir = os.path.join(user_data_dir, profile_folder)
     os.makedirs(base_user_data_dir, exist_ok=True)
 
     chrome_bin = r"C:\Program Files\Google\Chrome\Application\chrome.exe"

@@ -16,10 +16,11 @@ Notes:
    (this script will try to import it normally and also try to load it from
    common local locations if normal import fails).
  - Requires pymysql.
+ - This version reads a user identifier from a small text file (user.txt).
+   The file should contain the `by_user` value to use in the WHERE clause.
 """
 from __future__ import annotations
 import sys
-import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 import importlib.util
@@ -79,13 +80,19 @@ try:
 except AttributeError as e:
     raise RuntimeError("config.py is missing one of DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT") from e
 
-# Range file: prefer misc/range.txt (per your doc) otherwise range.txt next to this script
-if (THIS_DIR / "misc" / "range.txt").exists():
-    RANGE_FILE = THIS_DIR / "misc" / "range.txt"
-else:
-    RANGE_FILE = THIS_DIR / "range.txt"
+# User file: prefer misc/user.txt otherwise user.txt next to this script
+_USER_SEARCH_PATHS = [
+    THIS_DIR / "misc" / "user.txt",
+    THIS_DIR / "user.txt",
+]
 
-def read_range_id_from_file(path: Path) -> Optional[str]:
+# Allow also the parent/misc location (in case layout differs)
+_USER_SEARCH_PATHS.extend([
+    THIS_DIR.parent / "misc" / "user.txt",
+    THIS_DIR.parent / "user.txt",
+])
+
+def read_user_from_file(path: Path) -> Optional[str]:
     """Return the first non-empty line from the file, stripped, or None if not present."""
     if not path.exists():
         return None
@@ -97,6 +104,13 @@ def read_range_id_from_file(path: Path) -> Optional[str]:
                     return candidate
     except Exception:
         return None
+    return None
+
+def _locate_user_file() -> Optional[Path]:
+    """Return the first existing user file path from the search list, or None."""
+    for p in _USER_SEARCH_PATHS:
+        if p.exists():
+            return p
     return None
 
 def get_db_connection():
@@ -114,32 +128,41 @@ def get_db_connection():
 def get_email_for_profile(spot_id: int, profile_id: int) -> Optional[Dict[str, Any]]:
     """
     Return a dict with account fields for the given spot_id and profile_id,
-    matching range_id from RANGE_FILE as well (if available).
+    filtering by the 'by_user' value read from the user.txt file.
     Expected fields returned include at least:
       - email
       - email_psw
       - (other fields from your accounts table)
     Returns None if no matching row found.
+
+    NOTE: This function requires that a non-empty user.txt file exists
+    in one of the locations the script checks. If none is found the function
+    will raise a RuntimeError describing where to place the file.
     """
-    range_id = read_range_id_from_file(RANGE_FILE)
+    user_file = _locate_user_file()
+    if not user_file:
+        raise RuntimeError(
+            "user.txt not found. Create a small file named 'user.txt' (containing the by_user value)\n"
+            f"in one of these locations: {', '.join(str(p) for p in _USER_SEARCH_PATHS)}"
+        )
+
+    by_user = read_user_from_file(user_file)
+    if not by_user:
+        raise RuntimeError(f"user.txt found at {user_file!s} but it is empty. Put the by_user value on the first line.")
+
     q = (
         "SELECT `id`, `by_user`, `range_id`, `email`, `email_psw`, `email_otp`, `spot_id`, "
         "`profile_id`, `account_psw`, `ac_status`, `ac_last_used`, `created_at` "
-        "FROM `accounts` WHERE spot_id=%s AND profile_id=%s"
+        "FROM `accounts` WHERE spot_id=%s AND profile_id=%s AND by_user=%s "
+        "ORDER BY ac_last_used ASC LIMIT 1"
     )
-    params = [spot_id, profile_id]
-    if range_id:
-        q += " AND range_id=%s"
-        params.append(range_id)
-
-    # prefer least recently used (NULLs sort first by default in MySQL), limit 1
-    q += " ORDER BY ac_last_used ASC LIMIT 1"
+    params = (spot_id, profile_id, by_user)
 
     conn = None
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute(q, tuple(params))
+            cur.execute(q, params)
             row = cur.fetchone()
             if not row:
                 return None
@@ -158,7 +181,12 @@ if __name__ == "__main__":
     p.add_argument("--spot", type=int, required=True, help="spot_id (int)")
     p.add_argument("--profile", type=int, required=True, help="profile_id (int)")
     args = p.parse_args()
-    r = get_email_for_profile(args.spot, args.profile)
+    try:
+        r = get_email_for_profile(args.spot, args.profile)
+    except RuntimeError as e:
+        print("Error:", e)
+        sys.exit(2)
+
     if not r:
         print("No account found for spot", args.spot, "profile", args.profile)
     else:
