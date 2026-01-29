@@ -1,0 +1,34 @@
+Step 1: 
+Note:Run in Powershell to Install Latest Python in complete system and Add Path to environment variables
+$url='https://www.python.org/ftp/python/3.14.0/python-3.14.0-amd64.exe'; $out="$env:TEMP\python-installer.exe"; (New-Object System.Net.WebClient).DownloadFile($url,$out); Start-Process -FilePath $out -ArgumentList '/quiet','InstallAllUsers=1','TargetDir=C:\MyPython','PrependPath=1' -Wait; Remove-Item $out
+
+Above Command Verification
+python --version
+
+Step 2:
+Note: ReOpen Powershell and install following llbraries  
+if (Get-Command python -ErrorAction SilentlyContinue) { & python -m pip install --upgrade pip setuptools wheel; & python -m pip install --user undetected-chromedriver selenium webdriver-manager requests beautifulsoup4 python-dotenv pyotp pillow pymysql } elseif (Get-Command py -ErrorAction SilentlyContinue) { & py -3 -m pip install --upgrade pip setuptools wheel; & py -3 -m pip install --user undetected-chromedriver selenium webdriver-manager requests beautifulsoup4 python-dotenv pyotp pillow } else { Write-Error 'Python not found in PATH. Please open PowerShell where python is available (or add python to PATH).' }
+
+then 
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Write-Host 'Git not found — attempting to install via winget...'; if (Get-Command winget -ErrorAction SilentlyContinue) { winget install --id Git.Git -e --source winget } else { Write-Warning 'winget not found — please install Git manually from https://git-scm.com/download/win' } } ; if (Get-Command python -ErrorAction SilentlyContinue) { & python -m pip install --upgrade pip setuptools wheel; & python -m pip install --user undetected-chromedriver selenium webdriver-manager requests beautifulsoup4 python-dotenv pyotp pillow } elseif (Get-Command py -ErrorAction SilentlyContinue) { & py -3 -m pip install --upgrade pip setuptools wheel; & py -3 -m pip install --user undetected-chromedriver selenium webdriver-manager requests beautifulsoup4 python-dotenv pyotp pillow } else { Write-Error 'Python not found in PATH. Please open PowerShell where python is available (or add python to PATH).' }
+
+Step 3:
+Note: Install Chrome Latest Version
+$url='https://dl.google.com/chrome/install/latest/chrome_installer.exe'; $out="$env:TEMP\chrome_installer.exe"; (New-Object System.Net.WebClient).DownloadFile($url,$out); Start-Process -FilePath $out -ArgumentList '/silent','/install' -Wait; Remove-Item $out
+
+Step 4:
+Note: install Vscode for development  purpose 
+$url='https://update.code.visualstudio.com/latest/win32-x64/stable'; $out="$env:TEMP\VSCodeSetup-x64.exe"; (New-Object System.Net.WebClient).DownloadFile($url,$out); Start-Process -FilePath $out -ArgumentList '/silent','/mergetasks=!runcode' -Wait; Remove-Item $out
+
+Step 5: 
+Note: Clone Git Repo
+cd ~/Desktop
+git clone https://github.com/withalihassan/automations.git
+
+Step 6:
+Note: Working Spots and chrome  profiles in each Working Spot > Run below command 
+CMD > python .\automations\spotsetup.py
+
+
+python $env:USERPROFILE\Desktop\automations\sumsung\create_account.py
+system32

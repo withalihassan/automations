@@ -41,7 +41,7 @@ from selenium.common.exceptions import (
 
 # ----------------- Configuration -----------------
 OKX_URL              = "https://v3.account.samsung.com/dashboard/intro"
-CHROME_MAJOR_VERSION = 141
+CHROME_MAJOR_VERSION = 144
 FIXED_PASSWORD       = "@Smsng#0961"   # reference only
 DEFAULT_WAIT_SECONDS = 20
 SCREENSHOT_ON_ERROR  = True
