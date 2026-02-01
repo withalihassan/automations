@@ -63,7 +63,7 @@ except Exception:
 
 # ---------------- Config ----------------
 OKX_PHONE_URL = "https://v3.account.samsung.com/dashboard/security/phone"
-CHROME_MAJOR_VERSION = 141
+CHROME_MAJOR_VERSION = 144
 FIXED_PASSWORD = "@Smsng#860"
 DEFAULT_WAIT_SECONDS = 25
 SCREENSHOT_ON_ERROR = True
@@ -486,9 +486,9 @@ def poll_mail_for_verification_code_simple(email: str, email_psw: str, api_base:
 def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close_timeout: int, detach: bool, idx: int,
                   mail_api_base: Optional[str], mail_api_key: Optional[str], verification_timeout: int, verification_poll: float):
     tag = f"[spot-{spot}]"
-    user_data_dir = rf"C:\smsng_spot{spot}"
+    base_user_data_dir = rf"C:\smsng_spot{spot}"
     profile_folder = f"profile{profile}"
-    base_user_data_dir = os.path.join(user_data_dir, profile_folder)
+    # base_user_data_dir = os.path.join(user_data_dir, profile_folder)
     os.makedirs(base_user_data_dir, exist_ok=True)
 
     chrome_bin = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
