@@ -1,27 +1,21 @@
 #!/usr/bin/env python3
 """
-multi_account_create.py
+multi_account_create_profiles.py
 
 Windows-only bulk Samsung signup script (human-like) using undetected_chromedriver.
 
-Key behavior (changes compared to earlier version):
- - For each (spot, profile) the script fetches an email row from misc/email_fetcher.get_email_for_profile.
-   The row must contain at least `email` and `email_psw`.
- - After filling the Samsung signup form the worker polls the mailbox by calling:
-       from mail import fetch_codes_for_address
-       codes = fetch_codes_for_address(email, password=email_psw, api_base=..., api_key=...)
-   It uses the returned first code (if any) to fill the OTP input (#otp) and click Next.
+CHANGES in this rewrite:
+ - Accepts a single spot id (--spot) and multiple profile ids (--profiles).
+ - For the supplied spot, the script fetches an email row per profile by calling
+       misc.email_fetcher.get_email_for_profile(spot_id, profile_id)
+ - Behaviour otherwise preserved: fills signup form, polls mailbox using
+       mail.fetch_codes_for_address(address, password=..., api_base=..., api_key=...)
  - CLI exposes options to override mail API base/key, verification timeout/poll interval, detach, auto-close, etc.
- - Preserves previous robustness: retries, screenshot-on-error, wait-for-user-close, leaving browser open when detach=True.
 
 Usage examples:
-  python multi_account_create.py --spots 1,2,3 --profile 1
-  python multi_account_create.py --spots 1 --profile 1 --verification-timeout 180 --verification-poll 4
-  python multi_account_create.py --spots 1,2 --profile 1 --detach --auto-close-timeout 60
-
-Requirements:
- - mail.py must expose fetch_codes_for_address(address, password, api_base=None, api_key=None, ...)
- - misc/email_fetcher.py must expose get_email_for_profile(spot_id, profile_id) and return dict with email, email_psw.
+  python multi_account_create_profiles.py --spot 1 --profiles 1,2,3
+  python multi_account_create_profiles.py --spot 2 --profiles 1 --verification-timeout 180 --verification-poll 4
+  python multi_account_create_profiles.py --spot 1 --profiles 1,2 --detach --auto-close-timeout 60
 
 Drop this file in your project and run.
 """
@@ -50,7 +44,6 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 try:
     from mail import fetch_codes_for_address
 except Exception:
-    # try to load from same directory
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from mail import fetch_codes_for_address  # type: ignore
 
@@ -189,8 +182,8 @@ def find_and_click_create_account(driver, tag=""):
     selectors = [
         (By.CSS_SELECTOR, "span[data-testid='test-button-createaccount']"),
         (By.XPATH, "//span[contains(normalize-space(.),'Create account') or @data-log-id='create-account']"),
-        (By.XPATH, "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'create account')]"),
-        (By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'create account')]"),
+        (By.XPATH, "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'create account') ]"),
+        (By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'create account')]")
     ]
     for (by, sel) in selectors:
         try:
@@ -415,7 +408,7 @@ def enter_code_and_click_next(driver, code: str, tag: str) -> bool:
 
     selectors = [
         (By.CSS_SELECTOR, "button[data-testid='test-button-next']"),
-        (By.XPATH, "//button[normalize-space()='Next' or contains(., 'Next')]"),
+        (By.XPATH, "//button[normalize-space()='Next' or contains(., 'Next') ]"),
         (By.CSS_SELECTOR, "button[type='submit']")
     ]
     for (by, sel) in selectors:
@@ -485,10 +478,10 @@ def poll_mail_for_verification_code_simple(email: str, email_psw: str, api_base:
 
 def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close_timeout: int, detach: bool, idx: int,
                   mail_api_base: Optional[str], mail_api_key: Optional[str], verification_timeout: int, verification_poll: float):
-    tag = f"[spot-{spot}]"
-    base_user_data_dir = rf"C:\smsng_spot{spot}"
+    tag = f"[spot-{spot}][profile-{profile}]"
+    user_data_dir = rf"C:\smsng_spot{spot}"
     profile_folder = f"profile{profile}"
-    # base_user_data_dir = os.path.join(user_data_dir, profile_folder)
+    base_user_data_dir = os.path.join(user_data_dir, profile_folder)
     os.makedirs(base_user_data_dir, exist_ok=True)
 
     chrome_bin = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
@@ -523,7 +516,7 @@ def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close
         if not click_sign_in_then_createaccount_with_retries(driver, tag=tag):
             print(f"{tag} ERROR: create account step failed after retries.")
             if SCREENSHOT_ON_ERROR:
-                take_screenshot(driver, f"spot{spot}_create_account_error.png")
+                take_screenshot(driver, f"spot{spot}_profile{profile}_create_account_error.png")
             wait_for_user_close(driver, poll_interval=2, max_wait=auto_close_timeout, tag=tag)
             return
 
@@ -531,7 +524,7 @@ def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close
         if not ensure_checkbox_checked_before_agree_with_retries(driver, tag=tag):
             print(f"{tag} ERROR: checkbox could not be checked after retries.")
             if SCREENSHOT_ON_ERROR:
-                take_screenshot(driver, f"spot{spot}_checkbox_fail.png")
+                take_screenshot(driver, f"spot{spot}_profile{profile}_checkbox_fail.png")
             wait_for_user_close(driver, poll_interval=2, max_wait=auto_close_timeout, tag=tag)
             return
 
@@ -541,7 +534,7 @@ def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close
         if not click_agree_button_with_retries(driver, tag=tag):
             print(f"{tag} ERROR: Agree click failed after retries.")
             if SCREENSHOT_ON_ERROR:
-                take_screenshot(driver, f"spot{spot}_agree_fail.png")
+                take_screenshot(driver, f"spot{spot}_profile{profile}_agree_fail.png")
             wait_for_user_close(driver, poll_interval=2, max_wait=auto_close_timeout, tag=tag)
             return
 
@@ -560,7 +553,7 @@ def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close
         if not filled:
             print(f"{tag} ERROR: Sign-up form fill failed after retries for email {email}.")
             if SCREENSHOT_ON_ERROR:
-                take_screenshot(driver, f"spot{spot}_fill_fail.png")
+                take_screenshot(driver, f"spot{spot}_profile{profile}_fill_fail.png")
             wait_for_user_close(driver, poll_interval=2, max_wait=auto_close_timeout, tag=tag)
             return
 
@@ -581,7 +574,7 @@ def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close
             if not success:
                 print(f"{tag} Warning: code found ({code}) but could not be entered/clicked in the page.")
                 if SCREENSHOT_ON_ERROR:
-                    take_screenshot(driver, f"spot{spot}_code_entry_fail.png")
+                    take_screenshot(driver, f"spot{spot}_profile{profile}_code_entry_fail.png")
         else:
             print(f"{tag} No verification code received within timeout ({verification_timeout}s) for {email}.")
 
@@ -593,7 +586,7 @@ def worker_thread(spot: str, profile: str, email_row: Dict[str, Any], auto_close
         traceback.print_exc()
         if SCREENSHOT_ON_ERROR and driver:
             try:
-                take_screenshot(driver, f"spot{spot}_unexpected.png")
+                take_screenshot(driver, f"spot{spot}_profile{profile}_unexpected.png")
             except Exception:
                 pass
         if driver:
@@ -621,10 +614,10 @@ def parse_csv_list(s: str) -> List[str]:
 
 # ---------- Main ----------
 def main():
-    parser = argparse.ArgumentParser(description="Bulk Samsung signup (Windows-only) - fetch emails from misc/email_fetcher.py and OTP via mail.fetch_codes_for_address")
-    parser.add_argument('--spots', help='Comma-separated spot ids e.g. 1,2,3', required=False)
-    parser.add_argument('--profile', help='Single profile id used for all spots e.g. 1', required=False)
-    parser.add_argument('--emails', help='(optional) override DB fetch with comma-separated emails', required=False)
+    parser = argparse.ArgumentParser(description="Bulk Samsung signup (Windows-only) - single spot, multiple profiles. Fetch emails from misc/email_fetcher.py and OTP via mail.fetch_codes_for_address")
+    parser.add_argument('--spot', help='Single spot id e.g. 1 (required if not provided interactively)', required=False)
+    parser.add_argument('--profiles', help='Comma-separated profile ids e.g. 1,2,3', required=False)
+    parser.add_argument('--emails', help='(optional) override DB fetch with comma-separated emails (one per profile)', required=False)
     parser.add_argument('--auto-close-timeout', help='Seconds to wait after filling form before auto-closing (default: wait for manual close)', type=int, required=False)
     parser.add_argument('--detach', help='Leave browsers running on exit', action='store_true')
     parser.add_argument('--mail-api-base', help='SMTP.dev API base URL (overrides SMTP_DEV_BASE env)', required=False)
@@ -633,39 +626,42 @@ def main():
     parser.add_argument('--verification-poll', help='Seconds between mailbox polls (default 5)', type=float, default=5.0)
     args = parser.parse_args()
 
-    spots_input = args.spots or input("Enter spot ids (comma-separated, e.g. 1,2,3): ")
-    profile_input = args.profile or input("Enter single profile id to use for all spots (e.g. 1): ")
+    spot_input = args.spot or input("Enter single spot id (e.g. 1): ")
+    profiles_input = args.profiles or input("Enter profile ids (comma-separated, e.g. 1,2,3): ")
 
-    spots = parse_csv_list(spots_input)
-    if not spots:
-        print("[ERROR] No spots supplied.")
+    spot = spot_input.strip()
+    if not spot:
+        print("[ERROR] No spot supplied.")
         return
 
-    profile = profile_input.strip() or '1'
+    profiles = parse_csv_list(profiles_input)
+    if not profiles:
+        print("[ERROR] No profiles supplied.")
+        return
 
     # fetch rows (either override by --emails or use DB)
     fetched_rows: List[Dict[str, Any]] = []
     if args.emails:
         emails_list = parse_csv_list(args.emails)
-        for i, s in enumerate(spots):
+        for i, p in enumerate(profiles):
             fetched_rows.append({"email": emails_list[i % len(emails_list)], "email_psw": os.getenv("SMTP_DEV_PASSWORD", "")})
     else:
-        for s in spots:
+        for p in profiles:
             try:
-                row = get_email_for_profile(int(s), int(profile))
+                row = get_email_for_profile(int(spot), int(p))
             except Exception as e:
-                print(f"[WARN] DB fetch error for spot {s} profile {profile}: {e}")
+                print(f"[WARN] DB fetch error for spot {spot} profile {p}: {e}")
                 row = None
             if not row:
-                print(f"[ERROR] No DB row for spot {s} profile {profile}. Skipping this spot.")
+                print(f"[ERROR] No DB row for spot {spot} profile {p}. Skipping this profile.")
                 fetched_rows.append({"email": None, "email_psw": None})
             else:
                 fetched_rows.append(row)
 
     assigned_emails = [r.get("email") for r in fetched_rows]
     print("\nConfiguration:")
-    print(f"  Spots: {spots}")
-    print(f"  Profile used for all: profile{profile}")
+    print(f"  Spot: {spot}")
+    print(f"  Profiles: {profiles}")
     print(f"  Emails fetched/assigned: {assigned_emails}")
     print(f"  Auto-close timeout: {args.auto_close_timeout}")
     print(f"  Detach: {args.detach}")
@@ -674,11 +670,11 @@ def main():
     print(f"  Verification timeout: {args.verification_timeout}s, poll every {args.verification_poll}s\n")
 
     threads = []
-    for idx, spot in enumerate(spots, start=1):
+    for idx, profile in enumerate(profiles, start=1):
         email_row = fetched_rows[idx-1]
         email = email_row.get("email")
         if not email:
-            print(f"[WARN] skipping spot {spot} because no email was fetched.")
+            print(f"[WARN] skipping profile {profile} because no email was fetched.")
             continue
         t = threading.Thread(
             target=worker_thread,
