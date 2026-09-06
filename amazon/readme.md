@@ -1,0 +1,3 @@
+Smtp dev token
+
+smtplabs_S5iqgkCMPFAnYeA9pN83CUJffA7f8McTZWNuiC8JuZjgPcWR
